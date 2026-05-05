@@ -1,10 +1,24 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "catan_game.h"
 #include "catan_menu.h"
 #include "catan_map.h"
+
+/* Forward declarations needed across sections. */
+static void log_add(const char *fmt, ...);
+static void redraw(const Game *g);
+static int  village_setup_score(const Game *g, int v);
+static int  can_place_village(const Game *g, int v, int color);
+static int  can_place_village_setup(const Game *g, int v);
+static int  can_upgrade_to_city(const Game *g, int v, int color);
+static int  can_place_road(const Game *g, int s, int color);
+static void print_buildable_villages(const Game *g, const Player *p);
+static void print_buildable_roads(const Game *g, const Player *p);
+static void print_upgradable_villages(const Game *g, const Player *p);
+static void print_setup_village_candidates(const Game *g);
 
 /* ============================================================
  * Static topology data
@@ -146,6 +160,48 @@ int type_to_resource(int t) {
 		default:       return -1;
 	}
 }
+/* ============================================================
+ * Log buffer + redraw helper
+ *
+ * The terminal embed (xterm.js) and a real terminal both lose the map as
+ * the game scrolls. Instead, every prompt we'd otherwise print directly
+ * goes through redraw(), which clears the screen and re-renders the map,
+ * the status panel, and the most recent N events from a small ring buffer.
+ * Game-flow messages call log_add(); transient feedback (validation
+ * errors, sub-menus) still uses printf and washes away on next redraw.
+ * ============================================================ */
+#define LOG_LINES      8
+#define LOG_LINE_WIDTH 100
+
+static char g_log[LOG_LINES][LOG_LINE_WIDTH];
+static int  g_log_pos = 0;
+
+static void log_add(const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(g_log[g_log_pos], LOG_LINE_WIDTH, fmt, ap);
+	va_end(ap);
+	g_log_pos = (g_log_pos + 1) % LOG_LINES;
+}
+
+static void redraw(const Game *g) {
+	/* Cursor home + clear screen below. xterm.js handles this; on a real
+	 * terminal it works as long as ANSI VT processing is on. */
+	printf("\033[H\033[2J");
+	print_map(g->blocks, g->villages, g->streets, g->indexs);
+	print_status(g);
+	printf("\n--- recent events ---\n");
+	int empty = 1;
+	for (int i = 0; i < LOG_LINES; i++) {
+		int idx = (g_log_pos + i) % LOG_LINES;
+		if (g_log[idx][0]) {
+			printf("  %s\n", g_log[idx]);
+			empty = 0;
+		}
+	}
+	if (empty) printf("  (no events yet)\n");
+}
+
 /* ============================================================
  * Game init
  * ============================================================ */
@@ -317,13 +373,19 @@ static int total_cards(const Player *p) {
  * Does nothing if victim has no cards. */
 static void steal_random(Player *thief, Player *victim) {
 	int total = total_cards(victim);
-	if (total <= 0) return;
+	if (total <= 0) {
+		log_add("%s steals from %s — nothing to take", thief->name, victim->name);
+		return;
+	}
 	int pick = rand() % total;
 	for (int r = 0; r < NUM_RESOURCES; r++) {
 		if (pick < victim->resources[r]) {
 			victim->resources[r]--;
 			thief->resources[r]++;
-			printf("  %s steals 1 %s from %s.\n", thief->name, resource_name(r), victim->name);
+			if (thief->is_human || victim->is_human)
+				log_add("%s steals 1 %s from %s", thief->name, resource_name(r), victim->name);
+			else
+				log_add("%s steals 1 card from %s", thief->name, victim->name);
 			return;
 		}
 		pick -= victim->resources[r];
@@ -372,19 +434,28 @@ static int ai_pick_thief_block(const Game *g, int self_color) {
 static void move_thief_and_steal(Game *g, int actor_idx) {
 	Player *actor = &g->players[actor_idx];
 	int target;
-	if (actor->is_human) target = human_pick_thief_block(g->thief_block);
-	else                  { target = ai_pick_thief_block(g, actor->color); printf("  %s moves the thief to block %d.\n", actor->name, target); }
+	if (actor->is_human) {
+		redraw(g);
+		printf("\n  thief currently on block %d. blocks 1..19 listed across the map.\n", g->thief_block);
+		target = human_pick_thief_block(g->thief_block);
+	} else {
+		target = ai_pick_thief_block(g, actor->color);
+	}
 	g->thief_block = target;
+	log_add("%s moves the thief to block %d", actor->name, target);
 
 	int victim_idxs[NUM_PLAYERS];
 	int nv = victims_at_block(g, target, actor->color, victim_idxs);
-	if (nv == 0) { printf("  no opponents to steal from.\n"); return; }
+	if (nv == 0) {
+		log_add("  no opponents on block %d — no steal", target);
+		return;
+	}
 	int victim;
 	if (actor->is_human) {
-		printf("  Victims: ");
+		printf("\n  victims on block %d: ", target);
 		for (int i = 0; i < nv; i++) printf("[%d]%s  ", i + 1, g->players[victim_idxs[i]].name);
 		printf("\n");
-		int sel = read_int("  Steal from which? ", 1, nv);
+		int sel = read_int("  steal from which? ", 1, nv);
 		victim = victim_idxs[sel - 1];
 	} else {
 		victim = victim_idxs[rand() % nv];
@@ -400,18 +471,20 @@ static void apply_thief_on_seven(Game *g, int roller_idx) {
 		if (total <= 7) continue;
 		int discard = total / 2;
 		if (p->is_human) {
-			printf("\n[Thief] You have %d cards and must discard %d.\n", total, discard);
+			redraw(g);
+			printf("\n[thief] you have %d cards — must discard %d.\n", total, discard);
 			while (discard > 0) {
-				printf("  Resources: ");
+				printf("  resources: ");
 				for (int r = 0; r < NUM_RESOURCES; r++) printf("%s=%d  ", resource_name(r), p->resources[r]);
-				printf("\n");
-				int sel = read_int("  Discard which? 1)Wool 2)Brick 3)Ore 4)Wheat 5)Lumber: ", 1, 5) - 1;
-				if (p->resources[sel] <= 0) { printf("    none of those.\n"); continue; }
+				printf("  (%d more to discard)\n", discard);
+				int sel = read_int("  discard which? 1)wool 2)brick 3)ore 4)wheat 5)lumber: ", 1, 5) - 1;
+				if (p->resources[sel] <= 0) { printf("    none of those\n"); continue; }
 				p->resources[sel]--;
 				discard--;
 			}
+			log_add("you discarded %d cards", total / 2);
 		} else {
-			printf("[Thief] %s discards %d cards.\n", p->name, discard);
+			log_add("%s discards %d cards", p->name, discard);
 			while (discard > 0) {
 				int big = 0;
 				for (int r = 1; r < NUM_RESOURCES; r++)
@@ -442,6 +515,83 @@ static int village_setup_score(const Game *g, int v) {
 	}
 	return s;
 }
+
+/* ---- buildable-location helpers (printed inline, not logged) ---- */
+static void list_hex_neighbours(const Game *g, int v) {
+	int n = g->topo.village_blocks_count[v];
+	for (int k = 0; k < n; k++) {
+		int b = g->topo.village_blocks[v][k];
+		if (g->blocks[b] == T_DESERT) printf("desert");
+		else                          printf("%s[%d]", type_name(g->blocks[b]), g->indexs[b]);
+		if (k < n - 1) printf(", ");
+	}
+}
+
+static void print_buildable_villages(const Game *g, const Player *p) {
+	printf("\n  valid vertices for new village:\n   ");
+	int count = 0, on_line = 0;
+	for (int v = 1; v < NUM_VILLAGES; v++) {
+		if (!can_place_village(g, v, p->color)) continue;
+		if (on_line >= 6) { printf("\n   "); on_line = 0; }
+		printf(" v%-2d", v);
+		on_line++; count++;
+	}
+	if (count == 0) printf(" (none — extend a road first)");
+	printf("\n");
+}
+
+static void print_buildable_roads(const Game *g, const Player *p) {
+	printf("\n  valid edges for new road:\n");
+	int count = 0;
+	for (int s = 1; s < NUM_STREETS; s++) {
+		if (!can_place_road(g, s, p->color)) continue;
+		int v1 = g->topo.street_v1[s], v2 = g->topo.street_v2[s];
+		if (count % 3 == 0) printf("   ");
+		printf(" e%-2d (v%d-v%d)", s, v1, v2);
+		if (count % 3 == 2) printf("\n");
+		count++;
+	}
+	if (count == 0) printf("    (none)\n");
+	else if (count % 3 != 0) printf("\n");
+}
+
+static void print_upgradable_villages(const Game *g, const Player *p) {
+	printf("\n  your villages (pick one to upgrade to city):\n");
+	int count = 0;
+	for (int v = 1; v < NUM_VILLAGES; v++) {
+		if (!can_upgrade_to_city(g, v, p->color)) continue;
+		printf("    v%-2d  ", v);
+		list_hex_neighbours(g, v);
+		printf("\n");
+		count++;
+	}
+	if (count == 0) printf("    (none)\n");
+}
+
+static void print_setup_village_candidates(const Game *g) {
+	typedef struct { int v; int score; } Cand;
+	Cand cs[NUM_VILLAGES];
+	int n = 0;
+	for (int v = 1; v < NUM_VILLAGES; v++) {
+		if (!can_place_village_setup(g, v)) continue;
+		cs[n].v = v;
+		cs[n].score = village_setup_score(g, v);
+		n++;
+	}
+	for (int i = 1; i < n; i++) {
+		Cand x = cs[i]; int j = i;
+		while (j > 0 && cs[j-1].score < x.score) { cs[j] = cs[j-1]; j--; }
+		cs[j] = x;
+	}
+	int show = n > 16 ? 16 : n;
+	printf("\n  best vertices by pip count:\n");
+	for (int i = 0; i < show; i++) {
+		printf("    v%-2d  pips=%2d  ", cs[i].v, cs[i].score);
+		list_hex_neighbours(g, cs[i].v);
+		printf("\n");
+	}
+	if (n > show) printf("    ... (%d more valid)\n", n - show);
+}
 static int ai_pick_setup_village(const Game *g) {
 	int best = 0, best_score = -1;
 	for (int v = 1; v < NUM_VILLAGES; v++) {
@@ -459,21 +609,25 @@ static int ai_pick_setup_road(const Game *g, int v) {
 	return 0;
 }
 static int human_pick_setup_village(const Game *g) {
+	print_setup_village_candidates(g);
 	while (1) {
-		int v = read_int("  Place village at vertex (1-54): ", 1, 54);
+		int v = read_int("  place village at vertex (1-54): ", 1, 54);
 		if (can_place_village_setup(g, v)) return v;
-		printf("    invalid (occupied or adjacent to another settlement).\n");
+		printf("    invalid (occupied or adjacent to another settlement)\n");
 	}
 }
 static int human_pick_setup_road(const Game *g, int v) {
-	printf("  Adjacent edges to vertex %d:", v);
-	for (int k = 0; k < g->topo.village_streets_count[v]; k++)
-		printf(" %d", g->topo.village_streets[v][k]);
+	printf("\n  adjacent edges to v%d:", v);
+	for (int k = 0; k < g->topo.village_streets_count[v]; k++) {
+		int s = g->topo.village_streets[v][k];
+		int o = (g->topo.street_v1[s] == v) ? g->topo.street_v2[s] : g->topo.street_v1[s];
+		printf("  e%d (-> v%d)", s, o);
+	}
 	printf("\n");
 	while (1) {
-		int s = read_int("  Place road at edge (1-72): ", 1, 72);
+		int s = read_int("  place road at edge (1-72): ", 1, 72);
 		if (can_place_road_setup(g, s, v)) return s;
-		printf("    invalid (must touch your new village).\n");
+		printf("    invalid (must touch your new village)\n");
 	}
 }
 static void give_initial_resources(Game *g, int color, int v) {
@@ -496,26 +650,27 @@ void run_setup_phase(Game *g) {
 		for (int idx = 0; idx < NUM_PLAYERS; idx++) {
 			int pi    = order[idx];
 			Player *p = &g->players[pi];
-			print_map(g->blocks, g->villages, g->streets, g->indexs);
-			printf("\n[Setup round %d] %s (color %d) — place a village and a road.\n", round + 1, p->name, p->color);
+			redraw(g);
+			printf("\n[setup round %d] %s — place a village and a road.\n", round + 1, p->name);
 			int v, s;
 			if (p->is_human) {
 				v = human_pick_setup_village(g);
 				g->villages[v] = p->color;
 				p->villages_left--;
-				print_map(g->blocks, g->villages, g->streets, g->indexs);
+				redraw(g);
+				printf("\n[setup round %d] %s — now place a road touching v%d.\n", round + 1, p->name, v);
 				s = human_pick_setup_road(g, v);
 			} else {
 				v = ai_pick_setup_village(g);
 				g->villages[v] = p->color;
 				p->villages_left--;
 				s = ai_pick_setup_road(g, v);
-				printf("  %s places village at %d and road at %d.\n", p->name, v, s);
 			}
 			g->streets[s] = p->color;
 			p->roads_left--;
 			p->points++;
 			if (round == 1) give_initial_resources(g, p->color, v);
+			log_add("[setup R%d] %s places village v%d, road e%d", round + 1, p->name, v, s);
 		}
 	}
 	update_longest_road(g);
@@ -561,7 +716,9 @@ static int do_build_free_road(Game *g, Player *p, int s) {
 }
 
 /* ============================================================
- * Longest road
+ * Longest road / largest army announcements
+ * (the actual builds happen in do_build_*; longest road is recomputed
+ *  by update_longest_road. Bonus award/transfer messages go to the log.)
  * ============================================================ */
 static int dfs_longest_path(const Game *g, int color, int v, char *road_used) {
 	int owner = village_owner_color(g, v);
@@ -601,9 +758,8 @@ static void update_longest_road(Game *g) {
 	int curr = g->longest_road_holder;
 	int curr_len = g->longest_road_length;
 	if (max_len < 5) {
-		/* no one qualifies; revoke if current holder no longer has 5+ */
 		if (curr >= 0 && g->players[curr].longest_road_length < 5) {
-			printf("  -> %s loses Longest Road bonus.\n", g->players[curr].name);
+			log_add("%s loses Longest Road", g->players[curr].name);
 			g->players[curr].has_longest_road = 0;
 			g->players[curr].points -= 2;
 			g->longest_road_holder = -1;
@@ -612,23 +768,19 @@ static void update_longest_road(Game *g) {
 		return;
 	}
 	if (curr < 0) {
-		/* award to max_holder if max_len >= 5 */
 		Player *p = &g->players[max_holder];
 		p->has_longest_road = 1;
 		p->points += 2;
 		g->longest_road_holder = max_holder;
 		g->longest_road_length = max_len;
-		printf("  -> %s gains Longest Road (+2)!\n", p->name);
+		log_add("%s gains Longest Road (+2)", p->name);
 	} else {
-		/* If holder still has the longest, just bump the threshold. */
 		if (g->players[curr].longest_road_length >= max_len) {
 			g->longest_road_length = g->players[curr].longest_road_length;
 			return;
 		}
-		/* Strictly longer challenger? Transfer. */
 		if (max_len > g->players[curr].longest_road_length) {
-			printf("  -> Longest Road transfers from %s to %s.\n",
-				g->players[curr].name, g->players[max_holder].name);
+			log_add("Longest Road: %s -> %s", g->players[curr].name, g->players[max_holder].name);
 			g->players[curr].has_longest_road = 0;
 			g->players[curr].points -= 2;
 			g->players[max_holder].has_longest_road = 1;
@@ -654,9 +806,9 @@ static void update_largest_army(Game *g) {
 		g->players[holder].points += 2;
 		g->largest_army_holder = holder;
 		g->largest_army_count  = max;
-		printf("  -> %s gains Largest Army (+2)!\n", g->players[holder].name);
+		log_add("%s gains Largest Army (+2)", g->players[holder].name);
 	} else if (max > g->players[curr].knights_played) {
-		printf("  -> Largest Army transfers from %s to %s.\n", g->players[curr].name, g->players[holder].name);
+		log_add("Largest Army: %s -> %s", g->players[curr].name, g->players[holder].name);
 		g->players[curr].has_largest_army = 0;
 		g->players[curr].points -= 2;
 		g->players[holder].has_largest_army = 1;
@@ -690,20 +842,20 @@ static int buy_dev_card(Game *g, Player *p) {
 	int t = draw_random_dev(g);
 	if (t < 0) return 0;
 	if (t == DEV_VP) {
-		/* VP cards count immediately as a hidden point and don't go through the lock. */
 		p->dev_hand[DEV_VP]++;
 		p->points++;
-		printf("  %s drew a Victory Point card (hidden).\n", p->name);
+		log_add("%s drew a Victory Point card", p->name);
 	} else {
 		p->dev_locked[t]++;
-		printf("  %s drew a %s card.\n", p->name, dev_name(t));
+		if (p->is_human) log_add("you drew a %s card", dev_name(t));
+		else             log_add("%s drew a development card", p->name);
 	}
 	return 1;
 }
 
 static void play_knight(Game *g, int actor_idx) {
 	Player *p = &g->players[actor_idx];
-	printf("  %s plays Knight!\n", p->name);
+	log_add("%s plays Knight!", p->name);
 	p->knights_played++;
 	move_thief_and_steal(g, actor_idx);
 	update_largest_army(g);
@@ -727,7 +879,7 @@ static void play_year_of_plenty(Game *g, Player *p) {
 	}
 	p->resources[r1]++;
 	p->resources[r2]++;
-	printf("  %s gains 1 %s + 1 %s.\n", p->name, resource_name(r1), resource_name(r2));
+	log_add("%s plays Year of Plenty (+1 %s, +1 %s)", p->name, resource_name(r1), resource_name(r2));
 }
 
 static void play_monopoly(Game *g, int actor_idx) {
@@ -751,26 +903,35 @@ static void play_monopoly(Game *g, int actor_idx) {
 		g->players[i].resources[r] = 0;
 	}
 	p->resources[r] += taken;
-	printf("  %s monopolises %s — takes %d card(s).\n", p->name, resource_name(r), taken);
+	log_add("%s plays Monopoly on %s (takes %d)", p->name, resource_name(r), taken);
 }
 
 static void play_road_building(Game *g, int actor_idx) {
 	Player *p = &g->players[actor_idx];
+	log_add("%s plays Road Building (2 free roads)", p->name);
 	for (int n = 0; n < 2; n++) {
 		if (p->roads_left <= 0) break;
 		if (p->is_human) {
-			print_map(g->blocks, g->villages, g->streets, g->indexs);
-			printf("  Free road #%d (of 2):\n", n + 1);
+			redraw(g);
+			printf("\n  Free road #%d (of 2):\n", n + 1);
+			print_buildable_roads(g, p);
 			while (1) {
 				int s = read_int("    edge (1-72, 0 to skip): ", 0, 72);
 				if (s == 0) break;
-				if (do_build_free_road(g, p, s)) break;
-				printf("    invalid placement.\n");
+				if (do_build_free_road(g, p, s)) {
+					log_add("you build a free road at e%d", s);
+					break;
+				}
+				printf("    invalid placement\n");
 			}
 		} else {
 			int placed = 0;
 			for (int s = 1; s < NUM_STREETS; s++) {
-				if (do_build_free_road(g, p, s)) { printf("  %s places free road at %d.\n", p->name, s); placed = 1; break; }
+				if (do_build_free_road(g, p, s)) {
+					log_add("%s places free road at e%d", p->name, s);
+					placed = 1;
+					break;
+				}
 			}
 			if (!placed) break;
 		}
@@ -810,9 +971,9 @@ static void human_trade_player(Game *g, Player *p) {
 	if (ai_evaluates_offer(&g->players[target_idx], get_r, get_n, give_r, give_n)) {
 		p->resources[give_r] -= give_n; p->resources[get_r] += get_n;
 		t->resources[get_r]  -= get_n;  t->resources[give_r] += give_n;
-		printf("  %s accepts the trade.\n", t->name);
+		log_add("trade with %s: you -%d %s, +%d %s", t->name, give_n, resource_name(give_r), get_n, resource_name(get_r));
 	} else {
-		printf("  %s declines.\n", t->name);
+		log_add("%s declined your trade", t->name);
 	}
 }
 
@@ -850,7 +1011,7 @@ static void human_trade_bank(Game *g, Player *p) {
 	int get = read_int("  Resource to GET [1=Wool 2=Brick 3=Ore 4=Wheat 5=Lumber]: ", 1, 5) - 1;
 	if (get == give) { printf("  must be different.\n"); return; }
 	int r = do_bank_trade(g, p, give, get);
-	printf("  Traded %d %s -> 1 %s.\n", r, resource_name(give), resource_name(get));
+	log_add("you trade %d %s -> 1 %s (bank)", r, resource_name(give), resource_name(get));
 }
 
 /* ============================================================
@@ -878,7 +1039,7 @@ static void human_play_dev(Game *g, Player *p, int player_idx) {
 
 static void human_take_turn(Game *g, Player *p, int player_idx) {
 	while (1) {
-		print_status(g);
+		redraw(g);
 		int ch = main_menu();
 		printf("\n");
 		if (ch == 6) return;
@@ -886,17 +1047,32 @@ static void human_take_turn(Game *g, Player *p, int player_idx) {
 			int what = build_menu();
 			if (what == 4) continue;
 			if (what == 1) {
-				if (!can_afford_road(p) || p->roads_left <= 0) { printf("  can't build road.\n"); continue; }
-				int s = read_int("  Road at edge (1-72): ", 1, 72);
-				if (!do_build_road(g, p, s)) printf("  invalid placement.\n");
+				if (!can_afford_road(p) || p->roads_left <= 0) {
+					log_add("can't build road (need 1 lumber + 1 brick and pieces left)");
+					continue;
+				}
+				print_buildable_roads(g, p);
+				int s = read_int("  road at edge (1-72): ", 1, 72);
+				if (do_build_road(g, p, s)) log_add("you build a road at e%d", s);
+				else                         log_add("invalid road placement at e%d", s);
 			} else if (what == 2) {
-				if (!can_afford_village(p) || p->villages_left <= 0) { printf("  can't build village.\n"); continue; }
-				int v = read_int("  Village at vertex (1-54): ", 1, 54);
-				if (!do_build_village(g, p, v)) printf("  invalid placement.\n");
+				if (!can_afford_village(p) || p->villages_left <= 0) {
+					log_add("can't build village (need 1 each lumber/brick/wheat/wool)");
+					continue;
+				}
+				print_buildable_villages(g, p);
+				int v = read_int("  village at vertex (1-54): ", 1, 54);
+				if (do_build_village(g, p, v)) log_add("you build a village at v%d", v);
+				else                            log_add("invalid village placement at v%d", v);
 			} else if (what == 3) {
-				if (!can_afford_city(p) || p->cities_left <= 0) { printf("  can't build city.\n"); continue; }
-				int v = read_int("  Upgrade vertex (1-54): ", 1, 54);
-				if (!do_build_city(g, p, v)) printf("  invalid (must own a village there).\n");
+				if (!can_afford_city(p) || p->cities_left <= 0) {
+					log_add("can't build city (need 2 wheat + 3 ore)");
+					continue;
+				}
+				print_upgradable_villages(g, p);
+				int v = read_int("  upgrade vertex (1-54): ", 1, 54);
+				if (do_build_city(g, p, v)) log_add("you upgrade v%d to a city", v);
+				else                         log_add("invalid city upgrade at v%d", v);
 			}
 			continue;
 		}
@@ -915,7 +1091,7 @@ static int ai_try_build(Game *g, Player *p) {
 		for (int v = 1; v < NUM_VILLAGES; v++)
 			if (can_upgrade_to_city(g, v, p->color)) {
 				do_build_city(g, p, v);
-				printf("  %s upgrades vertex %d to a city.\n", p->name, v);
+				log_add("%s upgrades v%d to a city", p->name, v);
 				return 1;
 			}
 	}
@@ -928,12 +1104,11 @@ static int ai_try_build(Game *g, Player *p) {
 		}
 		if (best > 0) {
 			do_build_village(g, p, best);
-			printf("  %s builds a village at %d.\n", p->name, best);
+			log_add("%s builds a village at v%d", p->name, best);
 			return 1;
 		}
 	}
 	if (can_afford_road(p) && p->roads_left > 0) {
-		/* Prefer roads that extend our longest path. */
 		int best_s = 0, best_len = -1;
 		for (int s = 1; s < NUM_STREETS; s++) {
 			if (!can_place_road(g, s, p->color)) continue;
@@ -944,7 +1119,7 @@ static int ai_try_build(Game *g, Player *p) {
 		}
 		if (best_s > 0) {
 			do_build_road(g, p, best_s);
-			printf("  %s builds a road at %d.\n", p->name, best_s);
+			log_add("%s builds a road at e%d", p->name, best_s);
 			return 1;
 		}
 	}
@@ -1016,7 +1191,7 @@ static int ai_try_trade(Game *g, Player *p) {
 			p->resources[give] -= ratio;
 			p->resources[get]  += 1;
 			if (can_afford_road(p) || can_afford_village(p) || can_afford_city(p)) {
-				printf("  %s trades %d %s -> 1 %s.\n", p->name, ratio, resource_name(give), resource_name(get));
+				log_add("%s trades %d %s -> 1 %s (bank)", p->name, ratio, resource_name(give), resource_name(get));
 				return 1;
 			}
 			p->resources[give] += ratio;
@@ -1043,18 +1218,17 @@ static void ai_take_turn(Game *g, Player *p, int player_idx) {
 void run_player_turn(Game *g, int player_idx) {
 	Player *p = &g->players[player_idx];
 	unlock_dev_cards(p);
-	print_map(g->blocks, g->villages, g->streets, g->indexs);
-	printf("\n=== %s's turn ===\n", p->name);
+	log_add("=== %s's turn ===", p->name);
 
 	if (p->is_human) {
-		printf("Press any key to roll the dice...");
+		redraw(g);
+		printf("\nPress any key to roll the dice...");
 		fflush(stdout);
 		getch();
-		printf("\n");
 	}
 	int roll = roll_dice();
 	g->last_roll = roll;
-	printf("[Dice] %s rolled %d.\n", p->name, roll);
+	log_add("[dice] %s rolled %d", p->name, roll);
 	if (roll == 7) apply_thief_on_seven(g, player_idx);
 	else           distribute_resources(g, roll);
 
