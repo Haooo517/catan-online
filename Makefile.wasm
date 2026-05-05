@@ -1,0 +1,38 @@
+# Build the wasm bundle for the browser.
+#
+#   source ~/emsdk/emsdk_env.sh        # once per shell
+#   make -f Makefile.wasm
+#
+# Output: build-wasm/catan.js  +  build-wasm/catan.wasm
+
+EMCC ?= emcc
+SRC  := catan.c catan_map.c catan_menu.c catan_game.c
+OUT  := build-wasm
+BIN  := $(OUT)/catan.js
+
+EMFLAGS := \
+	-O2 \
+	-std=c11 \
+	-sASYNCIFY \
+	-sASYNCIFY_STACK_SIZE=65536 \
+	-sASYNCIFY_IMPORTS=js_get_char,js_read_line \
+	-sMODULARIZE=1 \
+	-sEXPORT_NAME=createCatanModule \
+	-sENVIRONMENT=web \
+	-sINITIAL_MEMORY=33554432 \
+	-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8 \
+	-sNO_EXIT_RUNTIME=1 \
+	-sFILESYSTEM=0
+
+.PHONY: all clean
+
+all: $(BIN)
+
+$(BIN): $(SRC) catan_game.h catan_map.h catan_menu.h | $(OUT)
+	$(EMCC) $(EMFLAGS) $(SRC) -o $(BIN)
+
+$(OUT):
+	mkdir -p $(OUT)
+
+clean:
+	rm -rf $(OUT)

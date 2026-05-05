@@ -13,4 +13,5 @@ __MACOSX/
 
 # build artifacts
 build/
+build-wasm/
 *.dSYM/

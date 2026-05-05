@@ -4,6 +4,10 @@ A single-player terminal version of *Settlers of Catan*, written in C, with
 ANSI-coloured ASCII board rendering. You play one human seat against three
 greedy AI opponents.
 
+**Play in your browser:** [haoooo's portfolio](https://github.com/Haooo517/Hao-portfolio)
+hosts a WebAssembly build (compiled with Emscripten + xterm.js) of this
+exact source.
+
 ```
                                    *----*
                                   /      \
@@ -42,6 +46,21 @@ cl /W3 /O2 catan.c catan_map.c catan_menu.c catan_game.c /Fe:catan.exe
 
 ANSI colour escapes are enabled automatically on Windows 10+ via
 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`.
+
+### WebAssembly (Emscripten)
+
+```bash
+source $EMSDK/emsdk_env.sh
+make -f Makefile.wasm
+```
+
+Outputs `build-wasm/catan.js` and `build-wasm/catan.wasm`. Drop both into
+the static-asset folder of any website, then load `catan.js`; it exposes
+a global `createCatanModule({ jsReadLine, jsGetChar, print, ... })` that
+returns a Promise resolving once the runtime is ready. The C blocking
+input calls (`getch`, `read_int`) are routed via Asyncify into JS
+Promises — see [`components/catan-terminal.tsx`](https://github.com/Haooo517/Hao-portfolio/blob/main/components/catan-terminal.tsx)
+in the portfolio repo for the xterm.js wiring.
 
 ## Play
 

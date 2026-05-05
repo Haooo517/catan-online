@@ -4,6 +4,45 @@
 #include <string.h>
 #include "catan_menu.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+EM_ASYNC_JS(void, js_read_line, (char *buf, int maxlen), {
+	if (typeof Module.jsReadLine !== 'function') {
+		HEAPU8[buf] = 0;
+		return;
+	}
+	const line = await Module.jsReadLine();
+	const bytes = new TextEncoder().encode(line + '\n');
+	const n = Math.min(bytes.length, maxlen - 1);
+	for (let i = 0; i < n; i++) HEAPU8[buf + i] = bytes[i];
+	HEAPU8[buf + n] = 0;
+});
+
+EM_ASYNC_JS(int, js_get_char, (), {
+	if (typeof Module.jsGetChar !== 'function') return 13;
+	const c = await Module.jsGetChar();
+	return c;
+});
+
+char getch(void) {
+	return (char)js_get_char();
+}
+
+int read_int(const char *prompt, int min, int max) {
+	int v = 0;
+	char buf[64];
+	while (1) {
+		printf("%s", prompt);
+		fflush(stdout);
+		js_read_line(buf, sizeof(buf));
+		if (sscanf(buf, "%d", &v) == 1 && v >= min && v <= max) return v;
+		printf("  -> please enter a number between %d and %d\n", min, max);
+	}
+}
+
+#else  /* native build */
+
 #ifdef _WIN32
 #include <conio.h>
 char getch(void) {
@@ -50,6 +89,8 @@ int read_int(const char *prompt, int min, int max) {
 		printf("  -> please enter a number between %d and %d\n", min, max);
 	}
 }
+
+#endif  /* __EMSCRIPTEN__ */
 
 int start_menu(){
 	printf("\nWelcome to the best game ever - \033[31mCatan\033[m\n");
