@@ -5,16 +5,125 @@
 #include <math.h>
 #include "catan_map.h"
 
+/* ============================================================
+ * Vertex / block label overrides
+ *
+ * print_map originally drew each vertex as a single coloured `*` — fine
+ * visually but useless when the player has to type a vertex id at a
+ * prompt. This overlay maps every vertex's anchor cell (and the cell
+ * just to its right) to the 2-character label that should appear there:
+ *
+ *   empty vertex   -> "NN" (zero-padded vertex id, dark-on-light)
+ *   own village    -> "PX" (X = player color 1..4, in player colour)
+ *   own city       -> "CX"
+ *
+ * We also stamp each block's id ("01".."19") one row above the dice
+ * number so the human knows which block to send the thief to.
+ * ============================================================ */
+static const int V_ROW[55] = { 0,
+	 3,  3,  6,  6,  6,  6,  9,  9,  9,  9,  9,  9,
+	12, 12, 12, 12, 12, 12, 15, 15, 15, 15, 15, 15,
+	18, 18, 18, 18, 18, 18, 21, 21, 21, 21, 21, 21,
+	24, 24, 24, 24, 24, 24, 27, 27, 27, 27, 27, 27,
+	30, 30, 30, 30, 33, 33
+};
+static const int V_COL[55] = { 0,
+	28, 33, 20, 25, 36, 41, 12, 17, 28, 33, 44, 49,
+	 9, 20, 25, 36, 41, 52, 12, 17, 28, 33, 44, 49,
+	 9, 20, 25, 36, 41, 52, 12, 17, 28, 33, 44, 49,
+	 9, 20, 25, 36, 41, 52, 12, 17, 28, 33, 44, 49,
+	20, 25, 36, 41, 28, 33
+};
+
+/* Block centre rows and columns (where the dice token is printed). */
+static const int B_ROW[20] = { 0, 6, 9, 9,12,12,12,15,15,18,18,18,21,21,24,24,24,27,27,30 };
+static const int B_COL[20] = { 0,30,22,38,14,30,46,22,38,14,30,46,22,38,14,30,46,22,38,30 };
+
+#define MAP_R 38
+#define MAP_C 70
+static int  s_vertex_at  [MAP_R][MAP_C];   /* 0 or vertex id 1..54 */
+static char s_vertex_idx [MAP_R][MAP_C];   /* 0 = first char, 1 = second */
+static int  s_block_at   [MAP_R][MAP_C];   /* 0 or block id 1..19 */
+static char s_block_idx  [MAP_R][MAP_C];
+static int  s_init_done = 0;
+
+static void init_overrides(void) {
+	if (s_init_done) return;
+	s_init_done = 1;
+	memset(s_vertex_at, 0, sizeof(s_vertex_at));
+	memset(s_block_at,  0, sizeof(s_block_at));
+	for (int v = 1; v <= 54; v++) {
+		int r = V_ROW[v], c = V_COL[v];
+		s_vertex_at[r][c]      = v; s_vertex_idx[r][c]      = 0;
+		s_vertex_at[r][c + 1]  = v; s_vertex_idx[r][c + 1]  = 1;
+	}
+	for (int b = 1; b <= 19; b++) {
+		int r = B_ROW[b] - 1, c = B_COL[b];   /* row above dice token */
+		s_block_at[r][c]       = b; s_block_idx[r][c]       = 0;
+		s_block_at[r][c + 1]   = b; s_block_idx[r][c + 1]   = 1;
+	}
+}
+
+/* Vertex code in villages[]:  0=empty, 1..4=village color, 5..8=city color.
+ * All vertex labels render on a black background to match the original
+ * `*` style (the slot is in the dark margin between hexes). */
+static void print_vertex_label(int owner, int vertex_id, int char_idx) {
+	char buf[3];
+	if (owner == 0) {
+		snprintf(buf, sizeof(buf), "%02d", vertex_id);
+		printf("\033[40;37m%c\033[m", buf[char_idx]);     /* dim grey id */
+		return;
+	}
+	int color = (owner <= 4) ? owner : (owner - 4);
+	int fg;
+	switch (color) {
+		case 1: fg = 31; break;   /* red */
+		case 2: fg = 36; break;   /* cyan */
+		case 3: fg = 33; break;   /* yellow */
+		case 4: fg = 32; break;   /* green */
+		default: fg = 37; break;
+	}
+	char first  = (owner <= 4) ? 'P' : 'C';
+	char second = (char)('0' + color);
+	char ch = (char_idx == 0) ? first : second;
+	printf("\033[40;%d;1m%c\033[m", fg, ch);
+}
+
+/* Block id is painted ON the hex tile, so we keep the tile's bg colour
+ * and just put a bold digit on top. dice number stays white-on-white-bg
+ * (very legible) one row below — different style on purpose. */
+static int hex_bg_for_type(int t) {
+	switch (t) {
+		case 1: return 45;   /* wool   - magenta */
+		case 2: return 42;   /* lumber - green */
+		case 3: return 43;   /* wheat  - yellow */
+		case 4: return 40;   /* ore    - black */
+		case 5: return 41;   /* brick  - red */
+		case 6: return 47;   /* desert - white */
+		default: return 40;
+	}
+}
+
+static void print_block_label(int block_type, int block_id, int char_idx) {
+	char buf[3];
+	snprintf(buf, sizeof(buf), "%02d", block_id);
+	int bg = hex_bg_for_type(block_type);
+	int fg = (bg == 47) ? 30 : 37;            /* black on desert, else white */
+	printf("\033[%d;%d;1m%c\033[m", bg, fg, buf[char_idx]);
+}
+
 void print_map( int blocks[], int villages[], int streets[], int indexs[] ){
+	init_overrides();
 	//print gameboard
 	for(int i = 1; i <= 37; i++){
 		//player section 1
 		for(int j = 1; j <= 20; j++){
-			//p1
+			//p1 (white text — was muted-red which read as pink against the
+			//     terminal background)
 			if(i == 1 && j == 10)
-				printf("\033[40;31;1mP\033[m");
+				printf("\033[40;37;1mP\033[m");
 			else if(i == 1 && j == 11)
-				printf("\033[40;31;1m1\033[m");
+				printf("\033[40;37;1m1\033[m");
 			else if(i >= 2 && i <= 11 && j >= 2 && j <= 19)
 				printf("\033[47m \033[m");
 				
@@ -170,9 +279,22 @@ void print_map( int blocks[], int villages[], int streets[], int indexs[] ){
 		
 		//map
 		for(int j = 1; j <= 60; j++){
-			
+
+			//labelled-vertex / block-id overlay (intercepts ahead of the
+			//original village `*` dispatch and the per-block dice number)
+			if (s_vertex_at[i][j]) {
+				int v = s_vertex_at[i][j];
+				print_vertex_label(villages[v], v, s_vertex_idx[i][j]);
+				continue;
+			}
+			if (s_block_at[i][j]) {
+				int b = s_block_at[i][j];
+				print_block_label(blocks[b], b, s_block_idx[i][j]);
+				continue;
+			}
+
 			//villages
-			
+
 			if(i == 3 && j == 28) //village 1
 				print_village(villages[1]);
 			else if(i == 3 && j == 33) //village 2

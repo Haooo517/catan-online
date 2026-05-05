@@ -15,10 +15,7 @@ static int  can_place_village(const Game *g, int v, int color);
 static int  can_place_village_setup(const Game *g, int v);
 static int  can_upgrade_to_city(const Game *g, int v, int color);
 static int  can_place_road(const Game *g, int s, int color);
-static void print_buildable_villages(const Game *g, const Player *p);
-static void print_buildable_roads(const Game *g, const Player *p);
-static void print_upgradable_villages(const Game *g, const Player *p);
-static void print_setup_village_candidates(const Game *g);
+static int  edge_between(const Game *g, int v1, int v2);
 
 /* ============================================================
  * Static topology data
@@ -516,81 +513,17 @@ static int village_setup_score(const Game *g, int v) {
 	return s;
 }
 
-/* ---- buildable-location helpers (printed inline, not logged) ---- */
-static void list_hex_neighbours(const Game *g, int v) {
-	int n = g->topo.village_blocks_count[v];
-	for (int k = 0; k < n; k++) {
-		int b = g->topo.village_blocks[v][k];
-		if (g->blocks[b] == T_DESERT) printf("desert");
-		else                          printf("%s[%d]", type_name(g->blocks[b]), g->indexs[b]);
-		if (k < n - 1) printf(", ");
-	}
-}
-
-static void print_buildable_villages(const Game *g, const Player *p) {
-	printf("\n  valid vertices for new village:\n   ");
-	int count = 0, on_line = 0;
-	for (int v = 1; v < NUM_VILLAGES; v++) {
-		if (!can_place_village(g, v, p->color)) continue;
-		if (on_line >= 6) { printf("\n   "); on_line = 0; }
-		printf(" v%-2d", v);
-		on_line++; count++;
-	}
-	if (count == 0) printf(" (none — extend a road first)");
-	printf("\n");
-}
-
-static void print_buildable_roads(const Game *g, const Player *p) {
-	printf("\n  valid edges for new road:\n");
-	int count = 0;
+/* edge_between: given two vertex IDs that are connected by a single road
+ * slot, return that edge's id; 0 if they aren't directly connected. Used
+ * by build prompts that take a vertex pair so the player never has to
+ * type a raw edge id (vertex labels are visible on the map). */
+static int edge_between(const Game *g, int v1, int v2) {
 	for (int s = 1; s < NUM_STREETS; s++) {
-		if (!can_place_road(g, s, p->color)) continue;
-		int v1 = g->topo.street_v1[s], v2 = g->topo.street_v2[s];
-		if (count % 3 == 0) printf("   ");
-		printf(" e%-2d (v%d-v%d)", s, v1, v2);
-		if (count % 3 == 2) printf("\n");
-		count++;
+		if ((g->topo.street_v1[s] == v1 && g->topo.street_v2[s] == v2) ||
+		    (g->topo.street_v1[s] == v2 && g->topo.street_v2[s] == v1))
+			return s;
 	}
-	if (count == 0) printf("    (none)\n");
-	else if (count % 3 != 0) printf("\n");
-}
-
-static void print_upgradable_villages(const Game *g, const Player *p) {
-	printf("\n  your villages (pick one to upgrade to city):\n");
-	int count = 0;
-	for (int v = 1; v < NUM_VILLAGES; v++) {
-		if (!can_upgrade_to_city(g, v, p->color)) continue;
-		printf("    v%-2d  ", v);
-		list_hex_neighbours(g, v);
-		printf("\n");
-		count++;
-	}
-	if (count == 0) printf("    (none)\n");
-}
-
-static void print_setup_village_candidates(const Game *g) {
-	typedef struct { int v; int score; } Cand;
-	Cand cs[NUM_VILLAGES];
-	int n = 0;
-	for (int v = 1; v < NUM_VILLAGES; v++) {
-		if (!can_place_village_setup(g, v)) continue;
-		cs[n].v = v;
-		cs[n].score = village_setup_score(g, v);
-		n++;
-	}
-	for (int i = 1; i < n; i++) {
-		Cand x = cs[i]; int j = i;
-		while (j > 0 && cs[j-1].score < x.score) { cs[j] = cs[j-1]; j--; }
-		cs[j] = x;
-	}
-	int show = n > 16 ? 16 : n;
-	printf("\n  best vertices by pip count:\n");
-	for (int i = 0; i < show; i++) {
-		printf("    v%-2d  pips=%2d  ", cs[i].v, cs[i].score);
-		list_hex_neighbours(g, cs[i].v);
-		printf("\n");
-	}
-	if (n > show) printf("    ... (%d more valid)\n", n - show);
+	return 0;
 }
 static int ai_pick_setup_village(const Game *g) {
 	int best = 0, best_score = -1;
@@ -609,7 +542,6 @@ static int ai_pick_setup_road(const Game *g, int v) {
 	return 0;
 }
 static int human_pick_setup_village(const Game *g) {
-	print_setup_village_candidates(g);
 	while (1) {
 		int v = read_int("  place village at vertex (1-54): ", 1, 54);
 		if (can_place_village_setup(g, v)) return v;
@@ -617,17 +549,12 @@ static int human_pick_setup_village(const Game *g) {
 	}
 }
 static int human_pick_setup_road(const Game *g, int v) {
-	printf("\n  adjacent edges to v%d:", v);
-	for (int k = 0; k < g->topo.village_streets_count[v]; k++) {
-		int s = g->topo.village_streets[v][k];
-		int o = (g->topo.street_v1[s] == v) ? g->topo.street_v2[s] : g->topo.street_v1[s];
-		printf("  e%d (-> v%d)", s, o);
-	}
-	printf("\n");
 	while (1) {
-		int s = read_int("  place road at edge (1-72): ", 1, 72);
-		if (can_place_road_setup(g, s, v)) return s;
-		printf("    invalid (must touch your new village)\n");
+		printf("  road from v%d to which neighbouring vertex?\n", v);
+		int v2 = read_int("  to vertex: ", 1, 54);
+		int s = edge_between(g, v, v2);
+		if (s > 0 && can_place_road_setup(g, s, v)) return s;
+		printf("    invalid (must be adjacent to v%d)\n", v);
 	}
 }
 static void give_initial_resources(Game *g, int color, int v) {
@@ -913,13 +840,14 @@ static void play_road_building(Game *g, int actor_idx) {
 		if (p->roads_left <= 0) break;
 		if (p->is_human) {
 			redraw(g);
-			printf("\n  Free road #%d (of 2):\n", n + 1);
-			print_buildable_roads(g, p);
+			printf("\n  Free road #%d of 2 (enter v=0 to skip):\n", n + 1);
 			while (1) {
-				int s = read_int("    edge (1-72, 0 to skip): ", 0, 72);
-				if (s == 0) break;
-				if (do_build_free_road(g, p, s)) {
-					log_add("you build a free road at e%d", s);
+				int v1 = read_int("    from vertex (0 to skip): ", 0, 54);
+				if (v1 == 0) break;
+				int v2 = read_int("    to   vertex: ", 1, 54);
+				int s = edge_between(g, v1, v2);
+				if (s > 0 && do_build_free_road(g, p, s)) {
+					log_add("you build a free road v%d-v%d", v1, v2);
 					break;
 				}
 				printf("    invalid placement\n");
@@ -1048,20 +976,21 @@ static void human_take_turn(Game *g, Player *p, int player_idx) {
 			if (what == 4) continue;
 			if (what == 1) {
 				if (!can_afford_road(p) || p->roads_left <= 0) {
-					log_add("can't build road (need 1 lumber + 1 brick and pieces left)");
+					log_add("can't build road (need 1 lumber + 1 brick + a free piece)");
 					continue;
 				}
-				print_buildable_roads(g, p);
-				int s = read_int("  road at edge (1-72): ", 1, 72);
-				if (do_build_road(g, p, s)) log_add("you build a road at e%d", s);
-				else                         log_add("invalid road placement at e%d", s);
+				int v1 = read_int("  road from vertex: ", 1, 54);
+				int v2 = read_int("  road to   vertex: ", 1, 54);
+				int s = edge_between(g, v1, v2);
+				if (s == 0)                          log_add("v%d and v%d are not adjacent", v1, v2);
+				else if (do_build_road(g, p, s))     log_add("you build a road v%d-v%d", v1, v2);
+				else                                  log_add("invalid road v%d-v%d", v1, v2);
 			} else if (what == 2) {
 				if (!can_afford_village(p) || p->villages_left <= 0) {
 					log_add("can't build village (need 1 each lumber/brick/wheat/wool)");
 					continue;
 				}
-				print_buildable_villages(g, p);
-				int v = read_int("  village at vertex (1-54): ", 1, 54);
+				int v = read_int("  village at vertex: ", 1, 54);
 				if (do_build_village(g, p, v)) log_add("you build a village at v%d", v);
 				else                            log_add("invalid village placement at v%d", v);
 			} else if (what == 3) {
@@ -1069,8 +998,7 @@ static void human_take_turn(Game *g, Player *p, int player_idx) {
 					log_add("can't build city (need 2 wheat + 3 ore)");
 					continue;
 				}
-				print_upgradable_villages(g, p);
-				int v = read_int("  upgrade vertex (1-54): ", 1, 54);
+				int v = read_int("  upgrade vertex: ", 1, 54);
 				if (do_build_city(g, p, v)) log_add("you upgrade v%d to a city", v);
 				else                         log_add("invalid city upgrade at v%d", v);
 			}
