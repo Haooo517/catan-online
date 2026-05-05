@@ -88,10 +88,13 @@ void rule_menu(){
 
 int main_menu(){
 	printf("What do you want to do now?\n");
-	printf("1) Build\n");
-	printf("2) Trade with bank (4:1)\n");
-	printf("3) End turn\n");
-	return read_int("Your choice: ", 1, 3);
+	printf("1) Build (road / village / city)\n");
+	printf("2) Buy development card  (1 ore + 1 wool + 1 wheat)\n");
+	printf("3) Play development card\n");
+	printf("4) Trade with bank / harbour\n");
+	printf("5) Trade with another player\n");
+	printf("6) End turn\n");
+	return read_int("Your choice: ", 1, 6);
 }
 
 int build_menu(){
@@ -104,9 +107,9 @@ int build_menu(){
 }
 
 int trade_menu(){
-	printf("Trade 4 of one resource for 1 of another (with the bank).\n");
+	printf("Trade with bank / harbour.\n");
 	printf("Resource codes: 1) Wool  2) Brick  3) Ore  4) Wheat  5) Lumber  6) Cancel\n");
-	return read_int("Resource to GIVE (4 cards) [1-6]: ", 1, 6);
+	return read_int("Resource to GIVE [1-6]: ", 1, 6);
 }
 
 int pause_menu(){

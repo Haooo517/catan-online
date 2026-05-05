@@ -65,15 +65,38 @@ ANSI colour escapes are enabled automatically on Windows 10+ via
 | Village | 1 lumber + 1 brick + 1 wheat + 1 wool | 1   |
 | City    | 2 wheat + 3 ore (upgrades a village) | 2 (replaces the 1 from village) |
 
-## What's NOT implemented (yet)
+## Trading
 
-This is the minimum playable build. The following standard Catan features
-are intentionally omitted:
+- **Bank**: spend 4 of any one resource for 1 of another.
+- **Generic harbour (3:1)**: if you have a settlement at one of the two
+  harbour vertices, you trade 3-for-1 instead.
+- **Specific harbour (2:1)**: if the harbour matches a resource type, you
+  trade 2-of-that-resource for 1 of any other.
+- **Player-to-player**: propose `give X get Y`. AI accepts when the deal is
+  fair (give ≥ get) and not unreasonably large.
 
-- Development cards (knight, progress, victory point)
-- Harbour trades (only the bank's 4:1 is supported)
-- Player-to-player trading
-- "Largest army" / "Longest road" bonuses
+## Development cards
+
+Cost: 1 ore + 1 wool + 1 wheat. Card type drawn at random from the deck of
+25 (14 Knight, 5 Victory Point, 2 Year of Plenty, 2 Monopoly, 2 Road
+Building). Cards bought this turn are locked until next turn (except VP,
+which is hidden but counts immediately).
+
+| Card | Effect |
+|------|--------|
+| Knight | Move the thief, steal one random card from a chosen victim. Counts toward Largest Army. |
+| Year of Plenty | Take any 2 resources from the bank. |
+| Monopoly | Name a resource — every other player gives you all of it they have. |
+| Road Building | Place 2 free roads. |
+| Victory Point | +1 hidden victory point. |
+
+## Bonus points
+
+- **Largest Army (+2)**: first player to *play* 3 Knight cards. Transfers
+  to anyone with strictly more played knights.
+- **Longest Road (+2)**: first player whose continuous chain of roads is 5+
+  segments. Transfers when another player surpasses the holder. An
+  opponent settlement on a vertex breaks the chain at that vertex.
 
 ## Files
 

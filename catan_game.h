@@ -5,6 +5,9 @@
 #define NUM_VILLAGES  55   /* indices 1..54 used */
 #define NUM_STREETS   73   /* indices 1..72 used */
 #define NUM_RESOURCES 5
+#define NUM_HARBOURS  9
+#define NUM_DEV_TYPES 5
+#define DECK_SIZE     25
 
 /* Resource indices into Player.resources[] */
 enum {
@@ -15,7 +18,7 @@ enum {
 	R_LUMBER = 4
 };
 
-/* Block type values (match catan.c blocks[] and print_block colors) */
+/* Block type values */
 enum {
 	T_WOOL   = 1,
 	T_LUMBER = 2,
@@ -25,20 +28,45 @@ enum {
 	T_DESERT = 6
 };
 
+/* Development card types */
+enum {
+	DEV_KNIGHT = 0,
+	DEV_VP     = 1,
+	DEV_YOP    = 2,   /* year of plenty */
+	DEV_MONO   = 3,   /* monopoly */
+	DEV_ROAD   = 4    /* road building */
+};
+
+/* Harbour type: 0 = generic 3:1; otherwise matches resource enum +1
+ * (1=wool, 2=lumber, 3=wheat, 4=ore, 5=brick). */
+typedef struct {
+	int type;
+	int villages[2];
+} Harbour;
+
 typedef struct {
 	int  resources[NUM_RESOURCES];
 	int  villages_left;
 	int  cities_left;
 	int  roads_left;
-	int  points;
-	int  color;       /* 1..4 — used for villages[] / streets[] cell value */
+	int  points;            /* including longest road / largest army / hidden VP cards */
+
+	int  dev_hand[NUM_DEV_TYPES];
+	int  dev_locked[NUM_DEV_TYPES];   /* bought this turn — can't play yet */
+	int  knights_played;
+	int  has_largest_army;
+	int  has_longest_road;
+	int  longest_road_length;
+	int  played_dev_this_turn;        /* enforces 1 dev card per turn */
+
+	int  color;
 	int  is_human;
 	const char *name;
 } Player;
 
 typedef struct {
-	int street_v1[NUM_STREETS];   /* street -> village endpoint 1 */
-	int street_v2[NUM_STREETS];   /* street -> village endpoint 2 */
+	int street_v1[NUM_STREETS];
+	int street_v2[NUM_STREETS];
 	int village_streets[NUM_VILLAGES][3];
 	int village_streets_count[NUM_VILLAGES];
 	int village_blocks[NUM_VILLAGES][3];
@@ -46,12 +74,23 @@ typedef struct {
 } BoardTopology;
 
 typedef struct {
-	int      *blocks;        /* hex resource type, 1..19 (catan.c owns the array) */
-	int      *indexs;        /* hex number token, 1..19 */
-	int      *villages;      /* village owner code, 1..54  (0=empty, 1..4=village, 5..8=city) */
-	int      *streets;       /* road owner code,    1..72  (0=empty, 1..4=color) */
-	int       thief_block;   /* current thief block index, 1..19 */
+	int      *blocks;
+	int      *indexs;
+	int      *villages;
+	int      *streets;
+	int       thief_block;
 	int       last_roll;
+
+	Harbour   harbours[NUM_HARBOURS];
+
+	int       dev_deck[NUM_DEV_TYPES];
+	int       deck_remaining;
+
+	int       largest_army_holder;   /* -1 if none */
+	int       largest_army_count;    /* current threshold (>=3) */
+	int       longest_road_holder;
+	int       longest_road_length;   /* current threshold (>=5) */
+
 	Player    players[NUM_PLAYERS];
 	BoardTopology topo;
 } Game;
@@ -59,19 +98,18 @@ typedef struct {
 /* lifecycle */
 void game_init(Game *g, int blocks[], int indexs[], int villages[], int streets[]);
 
-/* setup */
+/* setup & turns */
 void run_setup_phase(Game *g);
-
-/* turns */
 void run_player_turn(Game *g, int player_idx);
-int  game_winner(const Game *g);  /* returns 0..3 if someone has >= 10 points, else -1 */
+int  game_winner(const Game *g);
 
-/* helpers used by main / status display */
+/* helpers */
 void print_status(const Game *g);
 const char *resource_name(int r);
 const char *type_name(int t);
+const char *dev_name(int d);
 int  type_to_resource(int t);
 
 /* dice */
-int  roll_dice(void);   /* returns 2..12 */
+int  roll_dice(void);
 void distribute_resources(Game *g, int roll);
