@@ -22,13 +22,14 @@ EMFLAGS := \
 	-sINITIAL_MEMORY=33554432 \
 	-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8 \
 	-sNO_EXIT_RUNTIME=1 \
-	-sFILESYSTEM=0
+	-sFILESYSTEM=0 \
+	--js-library catan_emlib.js
 
 .PHONY: all clean
 
 all: $(BIN)
 
-$(BIN): $(SRC) catan_game.h catan_map.h catan_menu.h | $(OUT)
+$(BIN): $(SRC) catan_game.h catan_map.h catan_menu.h catan_emlib.js | $(OUT)
 	$(EMCC) $(EMFLAGS) $(SRC) -o $(BIN)
 
 $(OUT):
