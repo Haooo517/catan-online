@@ -1,0 +1,16 @@
+# compiled binaries
+*.o
+*.obj
+*.exe
+catan
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# build artifacts
+build/
+*.dSYM/
