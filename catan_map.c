@@ -651,13 +651,13 @@ void print_map( int blocks[], int villages[], int streets[], int indexs[] ){
 			//harbor 1
 			else if(i >= 3 && i <= 5 && j >= 20 && j <= 25){
 				if(i == 4 && j == 21)
-					printf("\033[45;30;1m2\033[m");
+					printf("\033[45;37;1m2\033[m");
 				else if(i == 4 && j == 22)
-					printf("\033[45;30;1m-\033[m");
+					printf("\033[45;37;1m-\033[m");
 				else if(i == 4 && j == 23)
-					printf("\033[45;30;1m>\033[m");
+					printf("\033[45;37;1m>\033[m");
 				else if(i == 4 && j == 24)
-					printf("\033[45;30;1m1\033[m");
+					printf("\033[45;37;1m1\033[m");
 				else
 					printf("\033[45m \033[m");
 			}
@@ -733,13 +733,13 @@ void print_map( int blocks[], int villages[], int streets[], int indexs[] ){
 			//harbor 6
 			else if(i >= 19 && i <= 21 && j >= 50 && j <= 56){
 				if(i == 20 && j == 52)
-					printf("\033[42;30;1m2\033[m");
+					printf("\033[42;37;1m2\033[m");
 				else if(i == 20 && j == 53)
-					printf("\033[42;30;1m-\033[m");
+					printf("\033[42;37;1m-\033[m");
 				else if(i == 20 && j == 54)
-					printf("\033[42;30;1m>\033[m");
+					printf("\033[42;37;1m>\033[m");
 				else if(i == 20 && j == 55)
-					printf("\033[42;30;1m1\033[m");
+					printf("\033[42;37;1m1\033[m");
 				else if(i == 19 && j >= 52)
 					printf("\033[42m \033[m");
 				else if(i == 20 && j >= 51)
@@ -751,13 +751,13 @@ void print_map( int blocks[], int villages[], int streets[], int indexs[] ){
 			//harbor 7
 			else if(i >= 28 && i <= 30 && j >= 13 && j <= 19){
 				if(i == 29 && j == 14)
-					printf("\033[43;30;1m2\033[m");
+					printf("\033[43;37;1m2\033[m");
 				else if(i == 29 && j == 15)
-					printf("\033[43;30;1m-\033[m");
+					printf("\033[43;37;1m-\033[m");
 				else if(i == 29 && j == 16)
-					printf("\033[43;30;1m>\033[m");
+					printf("\033[43;37;1m>\033[m");
 				else if(i == 29 && j == 17)
-					printf("\033[43;30;1m1\033[m");
+					printf("\033[43;37;1m1\033[m");
 				else if(i == 28 && j >= 13 && j <= 17)
 					printf("\033[43m \033[m");
 				else if(i == 29 && j >= 13 && j <= 18)
